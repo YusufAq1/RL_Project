@@ -13,8 +13,7 @@ This is a university course project (CISC 474) for a Reinforcement Learning tour
 
 ```
 project-root/
-├── main.py                          # Human/random player testing (reference only)
-├── train.py                         # Training script (you create/modify this)
+├── main.py                          # Training, evaluation, and testing (modify the bottom of this file)
 ├── coverage-gridworld/
 │   ├── setup.py
 │   └── coverage_gridworld/
@@ -27,8 +26,40 @@ project-root/
 
 - **NEVER modify `env.py` or `__init__.py`** — the team gets disqualified from the tournament if `env.py` is changed.
 - **ALL environment customization goes in `custom.py`** — this controls `observation_space()`, `observation()`, and `reward()`.
-- You may create additional files (training scripts, utilities, plotting scripts) outside the `coverage_gridworld` package.
+- **ALL training/evaluation code goes in `main.py`** — replace the existing loop at the bottom of the file with your PPO training and evaluation logic.
+- You may create additional utility/plotting files outside the `coverage_gridworld` package if needed.
 - Use **Stable Baselines 3** for the RL algorithm.
+
+## main.py Structure
+
+`main.py` already contains:
+- `human_player()` — manual keyboard control (keep for reference/debugging)
+- `random_player()` — random actions (keep for reference)
+- `maps` — a list of 5 predefined maps of increasing difficulty (useful for training)
+- **Bottom section** — the existing loop that creates the env and runs `human_player()`. **Replace this section with your training and evaluation code.**
+
+The bottom of `main.py` currently looks like this:
+```python
+env = gymnasium.make("sneaky_enemies", render_mode="human", predefined_map_list=None, activate_game_status=True)
+num_episodes = 5
+
+for i in range(num_episodes):
+    env.reset()
+    done = False
+    while not done:
+        action = human_player()
+        obs, reward, done, truncated, info = env.step(action)
+    if done:
+        time.sleep(2)
+env.close()
+```
+
+**Replace it with** PPO training logic (model creation, `model.learn()`, `EvalCallback`, `model.save()`) and an evaluation function. Keep `human_player()`, `random_player()`, and `maps` intact above — they are useful utilities and the `maps` list should be used for `predefined_map_list` during training.
+
+Use `argparse` or a simple flag variable at the top of the file to switch between training mode and evaluation mode, e.g.:
+```python
+MODE = "train"  # change to "eval" to watch the trained agent
+```
 
 ---
 
@@ -265,7 +296,7 @@ pip install -e coverage-gridworld
 
 Execute in this order:
 
-1. **Set up training infrastructure**: Install dependencies, create `train.py` with PPO, EvalCallback, and TensorBoard logging.
+1. **Set up training infrastructure**: Install dependencies, replace the bottom of `main.py` with PPO training logic (model creation, EvalCallback, TensorBoard logging, model.save). Keep `human_player()`, `random_player()`, and `maps` intact.
 2. **Implement Observation Space A** (simplified grid) and **Reward Function 1** (exploration-focused) in `custom.py`. Verify training works on `just_go`.
 3. **Implement Reward Functions 2 and 3**. Run experiments with Observation Space A × all 3 rewards.
 4. **Implement Observation Space B** (agent-centric features). Run experiments with Observation Space B × all 3 rewards.
@@ -276,7 +307,7 @@ Execute in this order:
 
 ## File Output Expectations
 - `custom.py` — final version with the best observation space and reward function
-- `train.py` — main training script
+- `main.py` — contains training and evaluation logic (replaces the original bottom section)
 - `plots/` — directory with experiment plots (PNG/PDF)
 - `best_agent.zip` — trained model from Stable Baselines `save()`
 - `report.pdf` — comprehensive project report
