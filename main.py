@@ -1,12 +1,12 @@
-import argparse
 import random
-import shutil
 import time
 import gymnasium
+import shutil
+import argparse
 import coverage_gridworld  # must be imported, even though it's not directly referenced
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.callbacks import EvalCallback
 
 
 def human_player():
@@ -94,182 +94,114 @@ maps = [
     ]
 ]
 
+# ---- TRAIN ----- #
 
-def train(name, resume=False): # Name paramter used to organize runs
-    # create training environment. 
-    # standard generates random maps
-    # we used the pre-defined maps from main.py
+def train(name, resume=False):
+    
+    # create training environment
     train_env = make_vec_env(
         "just_go",
-        n_envs=1,
-        env_kwargs={"render_mode": None},
+        n_envs=4,
+        env_kwargs={
+            "predefined_map_list": None
+        }
     )
 
+    # create evaluation environment
     eval_env = make_vec_env(
         "just_go",
         n_envs=1,
-        env_kwargs={"render_mode": None},
+        env_kwargs={"render_mode": None}
     )
 
-    # Initialize the PPO algorithm
-    # MlpPolicy is a feedforward neural network
-    # train_env is the environment to train on
-    # tensorboard_log is the directory to save the training logs
-    # verbose=1 means that the training process will be printed to the console
+    # if resuming training, load the model
     if resume:
         model = PPO.load(f"./models/{name}/final", env=train_env)
         model.tensorboard_log = f"./logs/{name}"
-        print(f"Resuming training from ./models/{name}/final.zip")
+        print(f"Resuming Training")
+    # create PPO agent
     else:
         model = PPO(
             "MlpPolicy",
             train_env,
-            tensorboard_log=f"./logs/{name}",
             verbose=1,
+            tensorboard_log=f"./logs/{name}",
+            learning_rate=3e-4,
+            n_steps=2048,
+            batch_size=256,
+            n_epochs=10,
+            gamma=0.99,
+            ent_coef=0.01,
+            policy_kwargs=dict(net_arch=[256, 256]),
         )
 
-    # Create an evaluation callback
-    # This will evaluate the model every 10,000 steps
-    # and save the best model to a file
+
+
+    # callback every eval_freq timesteps
+    # evluates the agent for 5 episodes and saves the best model found so far
     eval_callback = EvalCallback(
         eval_env,
         best_model_save_path=f"./models/{name}/",
         log_path=f"./logs/{name}",
-        eval_freq=100000, 
-        n_eval_episodes=5,
+        eval_freq=100_000,
+        n_eval_episodes=10,
         deterministic=True,
         verbose=1,
     )
 
-
-    # start the training process. 
-    model.learn(total_timesteps=500000, callback=eval_callback)
-    # saves the model at the end of training
+    # the training loop
+    model.learn(total_timesteps=1_000_000, callback=eval_callback)
+    # save final model
     model.save(f"./models/{name}/final")
-    print(f"Training complete. Model saved to ./models/{name}/final.zip")
+
+    print("Training Complete")
 
     train_env.close()
     eval_env.close()
 
-
-def train_best(name="best_agent"):
-    """Three-phase curriculum training for the competition agent.
-
-    Phase 1 — just_go (500k steps):  learn systematic exploration on open grid.
-    Phase 2 — standard, no-enemy maps (400k steps): learn to navigate walls.
-    Phase 3 — standard, all maps incl. enemies (600k steps): learn enemy avoidance.
-
-    Weights carry forward across phases. Final best_agent.zip is saved from
-    the phase-3 checkpoint that scored highest on random unseen maps.
-    """
-    no_enemy_maps = maps[:2]   # maps[0]=open, maps[1]=walls only
-
-    # ── Phase 1: open grid, learn basic exploration ───────────────────────────
-    print(f"\n{'='*50}\n  Phase 1 — 500,000 timesteps\n{'='*50}\n")
-    p1_train = make_vec_env("just_go", n_envs=1, env_kwargs={"render_mode": None})
-    p1_eval  = make_vec_env("just_go", n_envs=1, env_kwargs={"render_mode": None})
-
-    model = PPO(
-        "MlpPolicy",
-        p1_train,
-        learning_rate=3e-4,
-        n_steps=1024,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        policy_kwargs=dict(net_arch=[128, 128]),
-        tensorboard_log=f"./logs/{name}",
-        verbose=1,
-    )
-    model.learn(total_timesteps=500_000, callback=EvalCallback(
-        p1_eval, best_model_save_path=f"./models/{name}/phase1/",
-        log_path=f"./logs/{name}/phase1", eval_freq=20_000,
-        n_eval_episodes=10, deterministic=True, verbose=1,
-    ), reset_num_timesteps=False)
-    model.save(f"./models/{name}/phase1/final")
-    model = PPO.load(f"./models/{name}/phase1/best_model", env=p1_train)
-    p1_train.close(); p1_eval.close()
-
-    # ── Phase 2: walls, no enemies ────────────────────────────────────────────
-    print(f"\n{'='*50}\n  Phase 2 — 400,000 timesteps\n{'='*50}\n")
-    p2_train = make_vec_env(
-        "standard", n_envs=1,
-        env_kwargs={"render_mode": None, "predefined_map_list": no_enemy_maps},
-    )
-    p2_eval = make_vec_env(
-        "standard", n_envs=1,
-        env_kwargs={"render_mode": None, "predefined_map_list": no_enemy_maps},
-    )
-    model.set_env(p2_train)
-    model.learn(total_timesteps=400_000, callback=EvalCallback(
-        p2_eval, best_model_save_path=f"./models/{name}/phase2/",
-        log_path=f"./logs/{name}/phase2", eval_freq=20_000,
-        n_eval_episodes=10, deterministic=True, verbose=1,
-    ), reset_num_timesteps=False)
-    model.save(f"./models/{name}/phase2/final")
-    model = PPO.load(f"./models/{name}/phase2/best_model", env=p2_train)
-    p2_train.close(); p2_eval.close()
-
-    # ── Phase 3: all maps including enemies ───────────────────────────────────
-    print(f"\n{'='*50}\n  Phase 3 — 600,000 timesteps\n{'='*50}\n")
-    p3_train = make_vec_env(
-        "standard", n_envs=1,
-        env_kwargs={"render_mode": None, "predefined_map_list": maps},
-    )
-    p3_eval = make_vec_env(
-        "standard", n_envs=1,
-        env_kwargs={"render_mode": None, "predefined_map_list": None},
-    )
-    model.set_env(p3_train)
-    model.learn(total_timesteps=600_000, callback=EvalCallback(
-        p3_eval, best_model_save_path=f"./models/{name}/phase3/",
-        log_path=f"./logs/{name}/phase3", eval_freq=20_000,
-        n_eval_episodes=10, deterministic=True, verbose=1,
-    ), reset_num_timesteps=False)
-    model.save(f"./models/{name}/phase3/final")
-    model = PPO.load(f"./models/{name}/phase3/best_model", env=p3_train)
-    p3_train.close(); p3_eval.close()
-
-    # ── Save final submission model ───────────────────────────────────────────
-    shutil.copy(f"./models/{name}/phase3/best_model.zip", "best_agent.zip")
-    print(f"\nDone! Competition model saved to best_agent.zip")
-
+# ----- Evaluation ------- #
 
 def evaluate(name):
-    # Load from best_model checkpoint if it exists, else try the path directly
+
+    # load the best model found during training
     try:
         model = PPO.load(f"./models/{name}/best_model")
     except FileNotFoundError:
-        model = PPO.load(name)  # allows: python main.py eval --name best_agent
+        model = PPO.load(name)
 
+    # Test agent on the following 3 envs 
     test_envs = [
-        ("just_go",       {"render_mode": "human"}),
-        ("safe",          {"render_mode": "human"}),
-        ("sneaky_enemies",{"render_mode": "human"}),
+        ("just_go", {"render_mode": "human"}),
+        ("safe", {"render_mode": "human"}),
+        ("sneaky_enemies", {"render_mode": "human"}),
     ]
 
+    
+    # loop through each test env
     for env_id, kwargs in test_envs:
-        print(f"\n── {env_id} ──")
+        print(f"-{env_id}-")
         env = gymnasium.make(env_id, **kwargs)
+        # run 3 episodes per environment
         for i in range(3):
+            # reset the env and get the initial observation
             obs, info = env.reset()
             done = False
-            steps = 0
+            steps = 0 
+            # at each step get the action and take a step
             while not done:
                 action, _ = model.predict(obs, deterministic=True)
                 obs, reward, done, truncated, info = env.step(action)
                 steps += 1
                 done = done or truncated
+            # compute map coverage and print episode outcome
             coverage = info["total_covered_cells"] / info["coverable_cells"] * 100
             outcome = "CAUGHT" if info["game_over"] else ("DONE" if info["cells_remaining"] == 0 else "TIMEOUT")
             print(f"  Episode {i+1}: {outcome} | Coverage: {coverage:.1f}% | Steps: {steps}")
             time.sleep(1)
         env.close()
+    
 
-
-# Example: python main.py train --name my_experiment
-# Example: python main.py eval --name my_experiment
-# Example: python main.py train --name my_experiment --resume
+# -------------------- #
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -284,5 +216,3 @@ if __name__ == "__main__":
         train_best(name=args.name if args.name != "experiment" else "best_agent")
     else:
         evaluate(args.name)
-
-
