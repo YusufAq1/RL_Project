@@ -414,8 +414,7 @@ def train(name, resume=False):
     eval_env.close()
 
 
-def train_curriculum(name="best_agent2", resume=False, extra_timesteps=2_000_000,
-                     hard_maps_only=False):
+def train_curriculum(name="best_agent2", resume=False, extra_timesteps=2_000_000):
     """Train with 4-stage curriculum: easy → hard maps.
 
     Stage 1: just_go + safe  (0 enemies, walls only)      → 800k steps
@@ -425,13 +424,9 @@ def train_curriculum(name="best_agent2", resume=False, extra_timesteps=2_000_000
     Total: ~6.1M steps, ~4–5 hours on CPU.
 
     resume=True: skips the curriculum stages and continues training the saved
-    final model. Weights AND optimizer state are restored so training continues
-    exactly where it left off. TensorBoard curve stays continuous.
-
-    hard_maps_only=True (only used with resume=True): trains exclusively on the
-    4 highest-difficulty maps. Use this when navigation is already learned and
-    only enemy avoidance needs improvement — concentrates all gradient signal
-    on high-enemy-density scenarios.
+    final model on all_maps. Weights AND optimizer state are restored, so
+    training continues exactly where it left off. TensorBoard curve stays
+    continuous. Use extra_timesteps to control how long the resumed run lasts.
     """
     os.makedirs(f"./models/{name}", exist_ok=True)
 
@@ -455,17 +450,11 @@ def train_curriculum(name="best_agent2", resume=False, extra_timesteps=2_000_000
     if resume:
         # ── Resume: restore full model (weights + optimizer) and keep training ──
         checkpoint = f"./models/{name}/final"
-        if hard_maps_only:
-            # 4 hardest maps only: chokepoint, sneaky_enemies, 4-corner-enemies, 5-open-enemies
-            resume_maps = [maps[3], maps[4], extra_maps[4], extra_maps[10]]
-            print(f"\nResuming from {checkpoint}.zip — {extra_timesteps:,} steps on hard maps only")
-        else:
-            resume_maps = all_maps
-            print(f"\nResuming from {checkpoint}.zip — {extra_timesteps:,} steps on all maps")
+        print(f"\nResuming from {checkpoint}.zip — {extra_timesteps:,} more steps on all maps")
         train_env = make_vec_env(
             "standard",
             n_envs=4,
-            env_kwargs={"predefined_map_list": resume_maps},
+            env_kwargs={"predefined_map_list": all_maps},
         )
         model = PPO.load(checkpoint, env=train_env)
         model.tensorboard_log = f"./logs/{name}"
@@ -644,8 +633,6 @@ if __name__ == "__main__":
     parser.add_argument("--extra-maps", action="store_true", help="also evaluate on extra_maps 5-15")
     parser.add_argument("--extra-timesteps", type=int, default=2_000_000,
                         help="additional timesteps when resuming curriculum (default: 2M)")
-    parser.add_argument("--hard-maps-only", action="store_true",
-                        help="resume curriculum on hard maps only (chokepoint, sneaky_enemies, 4-corner, 5-open)")
     args = parser.parse_args()
 
     if args.mode == "train":
@@ -653,8 +640,7 @@ if __name__ == "__main__":
     elif args.mode == "curriculum":
         curriculum_name = args.name if args.name != "experiment" else "best_agent2"
         train_curriculum(name=curriculum_name, resume=args.resume,
-                         extra_timesteps=args.extra_timesteps,
-                         hard_maps_only=args.hard_maps_only)
+                         extra_timesteps=args.extra_timesteps)
     elif args.mode == "train_best":
         train_best(name=args.name if args.name != "experiment" else "best_agent")
     else:

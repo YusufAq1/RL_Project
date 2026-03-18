@@ -218,9 +218,8 @@ def _reward_fn3(info: dict) -> float:
         # Progressive: 10 at 0% coverage → 25 near 100%
         r = 10.0 + coverage * 15.0
     else:
-        # Revisit / idle penalty — enough to break oscillation but allows
-        # strategic waiting (1-2 steps) for enemy FOV to rotate away.
-        r = -1.0
+        # Revisit / idle penalty — strong enough to break oscillation loops
+        r = -3.0
 
     # ── Proximity danger penalty ──────────────────────────────────────────
     # -20.0 per adjacent FOV cell: exceeds max new-cell reward (+25) when
