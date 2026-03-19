@@ -1,5 +1,6 @@
 import numpy as np
 import gymnasium as gym
+from collections import deque
 
 """
 Competition-optimized custom.py for CISC 474 Coverage Gridworld Tournament.
@@ -46,40 +47,83 @@ def _grid_to_ids(grid: np.ndarray) -> np.ndarray:
 
 
 # ── Observation Space A — Multi-Channel Binary Grid ───────────────────────────
-# Six binary channels (10×10 each) = 600 floats in [0, 1].
-# Channels:  unexplored | explored | wall | agent | enemy | danger
-# This is far more NN-friendly than raw integer categories because the network
-# doesn't have to learn that "2" means something categorically different from "3".
+# Seven binary channels (10×10 each) = 700 floats + 2 BFS direction hint = 702.
+# Channels: unexplored | explored | wall | agent | enemy | current_fov | predicted_fov
+#
+# New vs original:
+#   channel 6 — predicted FOV after one enemy rotation step (1-step lookahead)
+#   directional hint — BFS through walkable cells instead of Manhattan distance
+
+_FOV_DIRS = {0: (0, -1), 1: (1, 0), 2: (0, 1), 3: (-1, 0)}  # LEFT/DOWN/RIGHT/UP
+
+
+def _bfs_direction(ids: np.ndarray, agent_r: int, agent_c: int) -> np.ndarray:
+    """BFS to nearest reachable unexplored cell, returning normalized offset."""
+    visited = {(agent_r, agent_c)}
+    queue = deque([(agent_r, agent_c)])
+    while queue:
+        r, c = queue.popleft()
+        # Target: unexplored (0) or FOV-covered unexplored (5)
+        if ids[r, c] in (0, 5) and (r, c) != (agent_r, agent_c):
+            return np.array([(r - agent_r) / 9.0, (c - agent_c) / 9.0], dtype=np.float32)
+        for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+            if 0 <= nr < 10 and 0 <= nc < 10 and (nr, nc) not in visited and ids[nr, nc] != 2:
+                visited.add((nr, nc))
+                queue.append((nr, nc))
+    return np.zeros(2, dtype=np.float32)
+
+
+def _compute_predicted_fov(ids: np.ndarray) -> np.ndarray:
+    """Compute where each enemy's FOV will be after one CCW rotation step.
+
+    Enemies rotate CCW: orientation = (orientation + 1) % 4
+    Orientation is inferred from the direction of current FOV cells (RED/LIGHT_RED)
+    adjacent to each enemy position.
+    """
+    predicted = np.zeros((10, 10), dtype=np.float32)
+    for er, ec in np.argwhere(ids == 4):  # each GREEN = enemy
+        # Infer current orientation: first adjacent cell in FOV direction
+        current = None
+        for orient, (dr, dc) in _FOV_DIRS.items():
+            nr, nc = er + dr, ec + dc
+            if 0 <= nr < 10 and 0 <= nc < 10 and ids[nr, nc] in (5, 6):
+                current = orient
+                break
+        if current is None:
+            continue  # FOV fully blocked by wall — can't infer orientation
+        next_dr, next_dc = _FOV_DIRS[(current + 1) % 4]
+        for i in range(1, 5):  # FOV distance = 4
+            nr, nc = er + next_dr * i, ec + next_dc * i
+            if not (0 <= nr < 10 and 0 <= nc < 10) or ids[nr, nc] == 2:
+                break
+            predicted[nr, nc] = 1.0
+    return predicted
+
 
 def _obs_a(grid: np.ndarray) -> np.ndarray:
     ids = _grid_to_ids(grid)  # (10, 10)
-    channels = np.zeros((6, 10, 10), dtype=np.float32)
+    channels = np.zeros((7, 10, 10), dtype=np.float32)
     channels[0] = (ids == 0).astype(np.float32)              # unexplored
-    channels[1] = np.isin(ids, [1, 3]).astype(np.float32)    # explored (WHITE + GREY = visited)
+    channels[1] = np.isin(ids, [1, 3]).astype(np.float32)    # explored (WHITE + GREY)
     channels[2] = (ids == 2).astype(np.float32)              # wall
     channels[3] = (ids == 3).astype(np.float32)              # agent position
     channels[4] = (ids == 4).astype(np.float32)              # enemy
-    channels[5] = np.isin(ids, [5, 6]).astype(np.float32)    # danger zone (any FOV)
+    channels[5] = np.isin(ids, [5, 6]).astype(np.float32)    # current FOV danger
+    channels[6] = _compute_predicted_fov(ids)                 # predicted FOV (next step)
 
-    # ── Directional hint: offset to nearest unexplored cell ──────────────
-    # Gives the agent an explicit compass pointing toward unexplored territory,
-    # breaking oscillation loops on maps with many remaining cells to visit.
+    # BFS direction hint: normalized offset to nearest reachable unexplored cell
     agent_cells = np.argwhere(ids == 3)
-    unexplored_cells = np.argwhere(ids == 0)
-    if len(agent_cells) > 0 and len(unexplored_cells) > 0:
+    if len(agent_cells) > 0:
         ar, ac = agent_cells[0]
-        dists = np.abs(unexplored_cells[:, 0] - ar) + np.abs(unexplored_cells[:, 1] - ac)
-        nearest = unexplored_cells[np.argmin(dists)]
-        direction = np.array([(nearest[0] - ar) / 9.0, (nearest[1] - ac) / 9.0],
-                             dtype=np.float32)
+        direction = _bfs_direction(ids, int(ar), int(ac))
     else:
         direction = np.zeros(2, dtype=np.float32)
 
-    return np.concatenate([channels.flatten(), direction])  # (602,)
+    return np.concatenate([channels.flatten(), direction])  # (702,)
 
 
 def _obs_space_a() -> gym.spaces.Space:
-    return gym.spaces.Box(low=-1.0, high=1.0, shape=(602,), dtype=np.float32)
+    return gym.spaces.Box(low=-1.0, high=1.0, shape=(702,), dtype=np.float32)
 
 
 # ── Observation Space B — Agent-Centric Feature Vector ────────────────────────
@@ -241,7 +285,7 @@ def _reward_fn3(info: dict) -> float:
         ]
         if (nr, nc) in fov_cells
     )
-    r -= adjacent_danger * 20.0
+    r -= adjacent_danger * 5.0
 
     # Per-step penalty to encourage speed and break idle loops
     r -= 0.2

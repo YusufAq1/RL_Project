@@ -508,7 +508,7 @@ def train_curriculum(name="best_agent2", resume=False, extra_timesteps=2_000_000
                     verbose=1,
                     tensorboard_log=f"./logs/{name}",
                     learning_rate=3e-4,
-                    n_steps=2048,
+                    n_steps=4096,
                     batch_size=256,
                     n_epochs=10,
                     gamma=0.995,
